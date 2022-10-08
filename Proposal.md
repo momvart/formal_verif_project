@@ -14,5 +14,3 @@ Still, as proptest is using a general approach against all programs, we suspect 
  -->
  
  By the intermediate demo, we will aim to have a model consisting of linear equations for integers and string data types. On top of that, we hope to verify if binary search is indeed the correct approach for those two data types as well. 
-
-By the date we should present our demo, we want to be pretty sure about the minimality of test cases in proptest and propose a detailed plan for the next steps (either a proof or a modification to proptest crate).
