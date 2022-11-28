@@ -17,15 +17,10 @@ class ProgramPath:
     def __len__(self):
         return self.__list.__len__()
 
-
-class SubQuery:
+class Query:
     dependencies: FrozenSet[int]
     path: ProgramPath
     constraints: Tuple[Tuple[int, bool]]
-
-
-class Query:
-    subqueries: Tuple[SubQuery]
 
 
 class MySolver:
@@ -41,7 +36,7 @@ class MySolver:
             assert self.get_shared_prefix_length(path)[0] == self.__path_length
 
         self.__solver.push()
-        self.__solver.add(constraints[self.__path_length:])
+        self.__solver.add(constraints[self.__constraints_count:])
         result = self.__solver.check()
         self.__solver.pop()
         return result
@@ -64,7 +59,7 @@ class MySolver:
         self.__path_length += len(new_subpath)
         self.__solver.add(new_constraints)
 
-    def downgrade(self, subpath: List[Tuple[int, bool]], force=False):
+    def downgrade(self, subpath: List[Tuple[int, bool]], constraints, force=False):
         shared_subpath_length, shared_stack_count = self.get_shared_prefix_length(
             subpath)
         completely_shared_length = self.__path_length_to(shared_stack_count)
@@ -73,7 +68,7 @@ class MySolver:
             return False
         elif completely_shared_length < shared_subpath_length and force:
             self.__pop(1)
-            # TODO: push the rest again
+            self.upgrade(subpath[shared_subpath_length:], constraints[self.__constraints_count:], True)
             return True
 
         self.__pop(len(self.__path_length) - shared_stack_count)
@@ -109,6 +104,11 @@ class MySolver:
 
     def __path_length_to(self, stack_index):
         return sum(len(e) for e in self.__path_length[:stack_index])
+
+    @property
+    def __constraints_count(self):
+        # This retrieves all queries, we may use our counter to prevent the overhead.
+        return len(self.__solver.assertions())
 
 
 class SolverPrefixTree:
@@ -168,41 +168,34 @@ class SolverPool:
         self.__next_id = 1
 
     def solve(self, query: Query):
-        for subquery in query:
-            result = self.solve_subquery(subquery)
-            if result != z3.sat:
-                return result
-        return z3.sat
-
-    def solve_subquery(self, subquery: SubQuery):
-        key = subquery.dependencies
+        key = query.dependencies
         if key not in self.solver_trees:
             tree = SolverPrefixTree()
             # We add a default empty solver for every tree,
             # so a basic solver will always be available.
-            tree.insert(ProgramPath(), self.__create_solver(SubQuery()))
+            tree.insert(ProgramPath(), self.__create_solver(Query()))
             self.solver_trees[key] = tree
 
         tree = self.solver_trees[key]
 
-        solver = self.get_solver(tree, subquery)
-        return solver.solve(subquery.path, subquery.constraints)
+        solver = self.get_solver(tree, query)
+        return solver.solve(query.path, query.constraints)
 
-    def get_solver(self, tree: SolverPrefixTree, subquery: SubQuery):
-        solver = tree.find(subquery.path)
+    def get_solver(self, tree: SolverPrefixTree, query: Query):
+        solver = tree.find(query.path)
         if solver is None:
-            solver = self.__create_solver(subquery)
-            tree.insert(subquery.path, solver)
+            solver = self.__create_solver(query)
+            tree.insert(query.path, solver)
             return solver
 
         # Check any criteria here.
         return solver
 
-    def __create_solver(self, subquery: SubQuery):
+    def __create_solver(self, query: Query):
         solver = MySolver(self.__next_id)
         self.solvers.add(solver.id, solver)
         self.__next_id += 1
 
-        solver.upgrade(subquery.path, subquery.constraints)
+        solver.upgrade(query.path, query.constraints)
         return solver
 
