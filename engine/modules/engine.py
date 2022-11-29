@@ -22,6 +22,12 @@ class ProgramPath:
     def to_json_serializable(self):
         return self.__list
 
+    def __repr__(self) -> str:
+        return self.__list.__repr__()
+    
+    def __str__(self) -> str:
+        return self.__list.__str__()
+
 
 class Query:
     def __init__(self, dependencies: Iterable[int], path, constraints) -> None:
@@ -63,7 +69,13 @@ class MySolver:
     def solve(self, path, constraints: List[str], assert_prefix=False):
         self.statistics.solve_count += 1
 
+        logging.debug("Path to solve: %s", path)
+        logging.debug("Constraints to solve: %s", constraints)
+        logging.debug("Solver state: %s", self._solver)
+
         if assert_prefix:
+            logging.debug("Solver path length: %d", self._path_length)
+            logging.debug("Shared length: %d", self.get_shared_prefix_length(path)[0])
             assert self.get_shared_prefix_length(path)[0] == self._path_length
 
         if len(path) == self._path_length:
@@ -89,6 +101,10 @@ class MySolver:
     def upgrade(self, new_subpath: List[Tuple[int, bool]], new_constraints: List[str], downgradable=False):
         if len(new_subpath) == 0:
             return
+
+        logging.debug("Solver path before upgrade: %s", self._path_stack)
+        logging.debug("New subpath for upgrade: %s", new_subpath)
+        logging.debug("New constraints to be added: %s", new_constraints)
 
         if downgradable:
             self._path_stack.append(list())
@@ -155,7 +171,7 @@ class MySolver:
         logging.debug("Adding constraints: %s", str(constraints))
         self._solver.add([z3.parse_smt2_string(
             f"(assert {c})", ctx=self._solver.ctx, decls=self._const_declarations) for c in constraints])
-        logging.debug("Solver now: %s", self._solver)
+        logging.debug("Solver state after adding the constraints: %s", self._solver)
 
     def _pop(self, count):
         self._solver.pop(count)
@@ -245,6 +261,7 @@ class SolverPool:
         self.selection_strategy = BasicSolverSelectionStrategy()
         self._z3_ctx = z3.Context()
         self._const_declarations: Dict[str, z3.Symbol] = dict()
+        self._should_assert_solve = False
 
     def solve(self, query: Query):
         key = query.dependencies
@@ -256,7 +273,10 @@ class SolverPool:
         tree = self._solver_trees[key]
 
         solver = self._get_solver(tree, query)
-        return solver.solve(query.path, query.constraints)
+        return solver.solve(query.path, query.constraints, assert_prefix=self._should_assert_solve)
+
+    def enable_solve_prefix_assertions(self, value=True):
+        self._should_assert_solve = value
 
     def _ensure_const_for(self, dependencies: Iterable[int]):
         for index in dependencies:
