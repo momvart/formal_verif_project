@@ -3,6 +3,7 @@ from typing import List, Tuple, Dict, FrozenSet, Iterable
 import weakref
 import z3
 import logging
+from abc import ABC, abstractmethod
 
 
 class ProgramPath:
@@ -103,6 +104,10 @@ class MySolver:
 
         return subpath_index, stack_index
 
+    @property
+    def stack_path(self):
+        return tuple(step for entry in self.__path_stack for step in entry)
+
     def clone(self):
         new_solver = MySolver()
         new_solver.__path_stack = [e.copy() for e in self.__path_stack]
@@ -178,42 +183,57 @@ class LRUCache:
 
         self.items[id] = value
 
+class SolverSelectionStrategy(ABC):
+    @abstractmethod
+    def get_solver(self, found_solver: MySolver | None, query: Query) -> MySolver:
+        pass
+
+    def create_empty_solver() -> MySolver:
+        pass
+    
+class BasicSolverSelectionStrategy(SolverSelectionStrategy):
+    def get_solver(self, found_solver: MySolver | None, query: Query) -> MySolver:
+        if found_solver is None:
+            return self.create_empty_solver()
+        else:
+            return found_solver
 
 class SolverPool:
     def __init__(self) -> None:
         # This max size is random and no intuition is behind it.
-        self.solvers = LRUCache(200)
-        self.solver_trees: Dict[FrozenSet[int], SolverPrefixTree] = dict()
-        self.__next_id = 1
+        self._solvers = LRUCache(200)
+        self._solver_trees: Dict[FrozenSet[int], SolverPrefixTree] = dict()
+        self._next_id = 1
+        self.solver_selection_strategy = BasicSolverSelectionStrategy()
 
     def solve(self, query: Query):
         key = query.dependencies
-        if key not in self.solver_trees:
+        if key not in self._solver_trees:
             tree = SolverPrefixTree()
-            # We add a default empty solver for every tree,
-            # so a basic solver will always be available.
-            tree.insert(ProgramPath(), self._create_solver(Query([], ProgramPath([]), [])))
-            self.solver_trees[key] = tree
+            self._solver_trees[key] = tree
 
-        tree = self.solver_trees[key]
+        tree = self._solver_trees[key]
 
         solver = self._get_solver(tree, query)
         return solver.solve(query.path, query.constraints)
 
     def _get_solver(self, tree: SolverPrefixTree, query: Query):
-        solver = tree.find(query.path)
-        if solver is None:
-            solver = self._create_solver(query)
+        found_solver = tree.find(query.path)
+        
+        solver = self._solver_selection_strategy.get_solver(found_solver, query)
+        if solver is not found_solver:
             tree.insert(query.path, solver)
-            return solver
 
-        # Check any criteria here.
         return solver
 
-    def _create_solver(self, query: Query):
-        solver = MySolver(self.__next_id)
-        self.solvers.add(solver.id, solver)
-        self.__next_id += 1
-
-        solver.upgrade(query.path, query.constraints)
+    def _create_solver(self):
+        solver = MySolver(self._next_id)
+        self._solvers.add(solver.id, solver)
+        self._next_id += 1
         return solver
+
+    def _set_solver_selection_strategy(self, value: SolverSelectionStrategy):
+        value.create_empty_solver = lambda: self._create_solver()
+        self._solver_selection_strategy = value
+
+    solver_selection_strategy = property(fset=_set_solver_selection_strategy)
