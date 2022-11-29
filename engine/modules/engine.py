@@ -1,12 +1,12 @@
 from collections import OrderedDict
-from typing import List, Tuple, Dict, FrozenSet
+from typing import List, Tuple, Dict, FrozenSet, Iterable
 import weakref
 import z3
 
 
 class ProgramPath:
-    def __init__(self, path: Tuple[Tuple[int, bool]] = ()) -> None:
-        self.__list: Tuple[Tuple[int, bool]] = path
+    def __init__(self, path: Iterable[Tuple[int, bool]] = ()) -> None:
+        self.__list: Tuple[Tuple[int, bool]] = tuple(path)
 
     def __getitem__(self, index):
         if isinstance(index, slice):
@@ -17,10 +17,22 @@ class ProgramPath:
     def __len__(self):
         return self.__list.__len__()
 
+    def to_json_serializable(self):
+        return self.__list
+
+
 class Query:
-    dependencies: FrozenSet[int]
-    path: ProgramPath
-    constraints: Tuple[Tuple[int, bool]]
+    def __init__(self, dependencies: Iterable[int], path, constraints) -> None:
+        self.dependencies: FrozenSet[int] = frozenset(dependencies)
+        self.path: ProgramPath = path
+        self.constraints: Tuple[str] = tuple(constraints)
+
+    def to_json_serializable(self):
+        return {
+            "dependencies": list(self.dependencies),
+            "path": self.path.to_json_serializable(),
+            "constraints": self.constraints,
+        }
 
 
 class MySolver:
@@ -68,7 +80,8 @@ class MySolver:
             return False
         elif completely_shared_length < shared_subpath_length and force:
             self.__pop(1)
-            self.upgrade(subpath[shared_subpath_length:], constraints[self.__constraints_count:], True)
+            self.upgrade(subpath[shared_subpath_length:],
+                         constraints[self.__constraints_count:], True)
             return True
 
         self.__pop(len(self.__path_length) - shared_stack_count)
@@ -130,7 +143,7 @@ class SolverPrefixTree:
         Returns the solver having the longest common prefix with the given path.
         """
 
-        found_solver = self.solver()
+        found_solver = self.solver and self.solver()
         if len(path) == 0:
             return found_solver
 
@@ -140,7 +153,7 @@ class SolverPrefixTree:
         return found_solver
 
     def __set_solver(self, solver: MySolver):
-        if self.solver() is not None:
+        if self.solver and self.solver() is not None:
             print("Warining: Replacing an existing alive solver.")
         self.solver = weakref.ref(solver)
 
@@ -154,7 +167,7 @@ class LRUCache:
         self.items.move_to_end(id, True)
 
     def add(self, id, value):
-        if len(self.items > self.max_size):
+        if len(self.items) > self.max_size:
             self.items.popitem()
 
         self.items[id] = value
@@ -173,29 +186,28 @@ class SolverPool:
             tree = SolverPrefixTree()
             # We add a default empty solver for every tree,
             # so a basic solver will always be available.
-            tree.insert(ProgramPath(), self.__create_solver(Query()))
+            tree.insert(ProgramPath(), self._create_solver(Query([], ProgramPath([]), [])))
             self.solver_trees[key] = tree
 
         tree = self.solver_trees[key]
 
-        solver = self.get_solver(tree, query)
+        solver = self._get_solver(tree, query)
         return solver.solve(query.path, query.constraints)
 
-    def get_solver(self, tree: SolverPrefixTree, query: Query):
+    def _get_solver(self, tree: SolverPrefixTree, query: Query):
         solver = tree.find(query.path)
         if solver is None:
-            solver = self.__create_solver(query)
+            solver = self._create_solver(query)
             tree.insert(query.path, solver)
             return solver
 
         # Check any criteria here.
         return solver
 
-    def __create_solver(self, query: Query):
+    def _create_solver(self, query: Query):
         solver = MySolver(self.__next_id)
         self.solvers.add(solver.id, solver)
         self.__next_id += 1
 
         solver.upgrade(query.path, query.constraints)
         return solver
-
