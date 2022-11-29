@@ -2,6 +2,7 @@ from collections import OrderedDict
 from typing import List, Tuple, Dict, FrozenSet, Iterable
 import weakref
 import z3
+import logging
 
 
 class ProgramPath:
@@ -43,23 +44,23 @@ class MySolver:
         self.__path_length = 0
         self.__solver = z3.Solver()
 
-    def solve(self, path, constraints, assert_prefix=False):
+    def solve(self, path, constraints: List[str], assert_prefix=False):
         if assert_prefix:
             assert self.get_shared_prefix_length(path)[0] == self.__path_length
 
         self.__solver.push()
-        self.__solver.add(constraints[self.__constraints_count:])
+        self._add(constraints[self.__constraints_count:])
         result = self.__solver.check()
         self.__solver.pop()
         return result
 
     def sync_with(self, subpath: List[Tuple[int, bool]], constraints):
         _, shared_stack_count = self.get_shared_prefix_length(subpath)
-        self.__pop(len(self.__path_stack) - shared_stack_count)
+        self._pop(len(self.__path_stack) - shared_stack_count)
         self.upgrade(subpath[self.__path_length:],
                      constraints[self.__path_length:], True)
 
-    def upgrade(self, new_subpath: List[Tuple[int, bool]], new_constraints, downgradable=False):
+    def upgrade(self, new_subpath: List[Tuple[int, bool]], new_constraints: List[str], downgradable=False):
         if len(new_subpath) == 0:
             return
 
@@ -69,22 +70,22 @@ class MySolver:
 
         self.__path_stack[-1].extend(new_subpath)
         self.__path_length += len(new_subpath)
-        self.__solver.add(new_constraints)
+        self._add(new_constraints)
 
-    def downgrade(self, subpath: List[Tuple[int, bool]], constraints, force=False):
+    def downgrade(self, subpath: List[Tuple[int, bool]], constraints: List[str], force=False):
         shared_subpath_length, shared_stack_count = self.get_shared_prefix_length(
             subpath)
-        completely_shared_length = self.__path_length_to(shared_stack_count)
+        completely_shared_length = self._path_length_to(shared_stack_count)
 
         if shared_subpath_length < len(subpath):
             return False
         elif completely_shared_length < shared_subpath_length and force:
-            self.__pop(1)
+            self._pop(1)
             self.upgrade(subpath[shared_subpath_length:],
                          constraints[self.__constraints_count:], True)
             return True
 
-        self.__pop(len(self.__path_length) - shared_stack_count)
+        self._pop(len(self.__path_length) - shared_stack_count)
         return True
 
     def get_shared_prefix_length(self, path: List[Tuple[int, bool]]) -> Tuple[int, int]:
@@ -109,13 +110,17 @@ class MySolver:
         new_solver.__solver = self.__solver.__copy__()
         return new_solver
 
-    def __pop(self, count):
+    def _add(self, constraints: List[str]):
+        logging.debug("Adding constraints: %s", str(constraints))
+        self.__solver.add([z3.parse_smt2_string(c) for c in constraints])
+
+    def _pop(self, count):
         self.__solver.pop(count)
         for i in range(len(self.__path_stack), len(self.__path_stack) - count, -1):
             self.__path_length -= len(self.__path_stack[i])
         del self.__path_stack[len(self.__path_length) - count:]
 
-    def __path_length_to(self, stack_index):
+    def _path_length_to(self, stack_index):
         return sum(len(e) for e in self.__path_length[:stack_index])
 
     @property
@@ -132,6 +137,7 @@ class SolverPrefixTree:
     def insert(self, path: ProgramPath, solver: MySolver):
         if len(path) == 0:
             self.__set_solver(solver)
+            return
 
         if path[0] not in self.children:
             self.children[path[0]] = SolverPrefixTree()
@@ -154,7 +160,7 @@ class SolverPrefixTree:
 
     def __set_solver(self, solver: MySolver):
         if self.solver and self.solver() is not None:
-            print("Warining: Replacing an existing alive solver.")
+            logging.warn("Replacing an existing alive solver")
         self.solver = weakref.ref(solver)
 
 

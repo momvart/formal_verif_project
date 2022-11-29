@@ -31,8 +31,8 @@ def read_qsym_log(path) -> List[Query]:
 
             logging.debug("Read line: %s", line)
 
-            content = _get_content(line).strip().upper()
-            command = content
+            content = _get_content(line).strip()
+            command = content.upper()
             if False:
                 pass
             elif command == "RESET":
