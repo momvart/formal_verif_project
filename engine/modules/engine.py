@@ -41,36 +41,39 @@ class MySolver:
     def __init__(self, id) -> None:
         self.id = id
         # Stack of subpaths expressed by site ids and whether they are taken or not.
-        self.__path_stack: List[List[Tuple[int, bool]]] = []
-        self.__path_length = 0
-        self.__solver = z3.Solver()
+        self._path_stack: List[List[Tuple[int, bool]]] = []
+        self._path_length = 0
+        self._solver = z3.Solver()
 
     def solve(self, path, constraints: List[str], assert_prefix=False):
         if assert_prefix:
-            assert self.get_shared_prefix_length(path)[0] == self.__path_length
+            assert self.get_shared_prefix_length(path)[0] == self._path_length
 
-        self.__solver.push()
-        self._add(constraints[self.__constraints_count:])
-        result = self.__solver.check()
-        self.__solver.pop()
+        self._solver.push()
+        self._add(constraints[self.constraint_count:])
+        result = self._solver.check()
+        self._solver.pop()
         return result
 
     def sync_with(self, subpath: List[Tuple[int, bool]], constraints):
         _, shared_stack_count = self.get_shared_prefix_length(subpath)
-        self._pop(len(self.__path_stack) - shared_stack_count)
-        self.upgrade(subpath[self.__path_length:],
-                     constraints[self.__path_length:], True)
+        self._pop(len(self._path_stack) - shared_stack_count)
+        self.upgrade(subpath[self._path_length:],
+                     constraints[self.constraint_count:], True)
 
     def upgrade(self, new_subpath: List[Tuple[int, bool]], new_constraints: List[str], downgradable=False):
         if len(new_subpath) == 0:
             return
 
         if downgradable:
-            self.__path_stack.append(list())
-            self.__solver.push()
+            self._path_stack.append(list())
+            self._solver.push()
 
-        self.__path_stack[-1].extend(new_subpath)
-        self.__path_length += len(new_subpath)
+        if len(self._path_stack) == 0:
+            self._path_stack.append(list())
+
+        self._path_stack[-1].extend(new_subpath)
+        self._path_length += len(new_subpath)
         self._add(new_constraints)
 
     def downgrade(self, subpath: List[Tuple[int, bool]], constraints: List[str], force=False):
@@ -83,17 +86,17 @@ class MySolver:
         elif completely_shared_length < shared_subpath_length and force:
             self._pop(1)
             self.upgrade(subpath[shared_subpath_length:],
-                         constraints[self.__constraints_count:], True)
+                         constraints[self.constraint_count:], True)
             return True
 
-        self._pop(len(self.__path_length) - shared_stack_count)
+        self._pop(len(self._path_length) - shared_stack_count)
         return True
 
     def get_shared_prefix_length(self, path: List[Tuple[int, bool]]) -> Tuple[int, int]:
         subpath_index = 0
         stack_index = 0
-        while subpath_index < len(path) and stack_index < len(self.__path_stack):
-            entry = self.__path_stack[stack_index]
+        while subpath_index < len(path) and stack_index < len(self._path_stack):
+            entry = self._path_stack[stack_index]
             for i in range(min(len(entry), len(path) - subpath_index)):
                 if entry[i] != path[subpath_index]:
                     return subpath_index, stack_index
@@ -105,33 +108,35 @@ class MySolver:
         return subpath_index, stack_index
 
     @property
-    def stack_path(self):
-        return tuple(step for entry in self.__path_stack for step in entry)
+    def stack_path(self) -> ProgramPath:
+        return ProgramPath(step for entry in self._path_stack for step in entry)
 
-    def clone(self):
-        new_solver = MySolver()
-        new_solver.__path_stack = [e.copy() for e in self.__path_stack]
-        new_solver.__path_length = self.__path_length
-        new_solver.__solver = self.__solver.__copy__()
-        return new_solver
+    @property
+    def stack_path_len(self):
+        return self._path_length
+
+    @property
+    def constraint_count(self):
+        # This retrieves all queries, we may use our counter to prevent the overhead.
+        return len(self._solver.assertions())
+
+    def copy_from(self, other):
+        self._path_stack = [e.copy() for e in other._path_stack]
+        self._path_length = other._path_length
+        self._solver = other._solver.__copy__()
 
     def _add(self, constraints: List[str]):
         logging.debug("Adding constraints: %s", str(constraints))
-        self.__solver.add([z3.parse_smt2_string(c) for c in constraints])
+        self._solver.add([z3.parse_smt2_string(c) for c in constraints])
 
     def _pop(self, count):
-        self.__solver.pop(count)
-        for i in range(len(self.__path_stack), len(self.__path_stack) - count, -1):
-            self.__path_length -= len(self.__path_stack[i])
-        del self.__path_stack[len(self.__path_length) - count:]
+        self._solver.pop(count)
+        for i in range(len(self._path_stack), len(self._path_stack) - count, -1):
+            self._path_length -= len(self._path_stack[i])
+        del self._path_stack[len(self._path_length) - count:]
 
     def _path_length_to(self, stack_index):
-        return sum(len(e) for e in self.__path_length[:stack_index])
-
-    @property
-    def __constraints_count(self):
-        # This retrieves all queries, we may use our counter to prevent the overhead.
-        return len(self.__solver.assertions())
+        return sum(len(e) for e in self._path_length[:stack_index])
 
 
 class SolverPrefixTree:
@@ -159,7 +164,7 @@ class SolverPrefixTree:
             return found_solver
 
         if (child := self.children.get(path[0])):
-            found_solver = child.find_solver(path[1:]) or found_solver
+            found_solver = child.find(path[1:]) or found_solver
 
         return found_solver
 
@@ -204,7 +209,7 @@ class SolverPool:
         self._solvers = LRUCache(200)
         self._solver_trees: Dict[FrozenSet[int], SolverPrefixTree] = dict()
         self._next_id = 1
-        self.solver_selection_strategy = BasicSolverSelectionStrategy()
+        self.selection_strategy = BasicSolverSelectionStrategy()
 
     def solve(self, query: Query):
         key = query.dependencies
@@ -222,7 +227,7 @@ class SolverPool:
         
         solver = self._solver_selection_strategy.get_solver(found_solver, query)
         if solver is not found_solver:
-            tree.insert(query.path, solver)
+            tree.insert(solver.stack_path, solver)
 
         return solver
 
@@ -236,4 +241,4 @@ class SolverPool:
         value.create_empty_solver = lambda: self._create_solver()
         self._solver_selection_strategy = value
 
-    solver_selection_strategy = property(fset=_set_solver_selection_strategy)
+    selection_strategy = property(fset=_set_solver_selection_strategy)
