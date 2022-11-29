@@ -11,7 +11,7 @@ def _get_content(line):
 def read_qsym_log(path) -> List[Query]:
     queries = list()
     with open(path, "r") as f:
-        path = list()
+        path = None
         
         dependencies = None
         current_path = None
@@ -35,6 +35,11 @@ def read_qsym_log(path) -> List[Query]:
             command = content.upper()
             if False:
                 pass
+            elif command == "PROG":
+                path = list()
+            elif command == "END_PROG":
+                path = None
+
             elif command == "RESET":
                 dependencies = set()
                 current_path = None

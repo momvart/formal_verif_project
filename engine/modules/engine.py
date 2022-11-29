@@ -37,22 +37,44 @@ class Query:
         }
 
 
+class SolverStatistics:
+    def __init__(self) -> None:
+        self.solve_count = 0
+        self.push_count = 0
+        self.pop_count = 0
+
+    def __str__(self) -> str:
+        return str({"solve_count": self.solve_count, "push_count": self.push_count, "pop_count": self.pop_count, })
+
+    def __repr__(self) -> str:
+        return str(self)
+
+
 class MySolver:
-    def __init__(self, id) -> None:
+    def __init__(self, id, z3_ctx, const_declarations) -> None:
         self.id = id
         # Stack of subpaths expressed by site ids and whether they are taken or not.
         self._path_stack: List[List[Tuple[int, bool]]] = []
         self._path_length = 0
-        self._solver = z3.Solver()
+        self._solver = z3.Solver(ctx=z3_ctx)
+        self._const_declarations = const_declarations
+        self.statistics = SolverStatistics()
 
     def solve(self, path, constraints: List[str], assert_prefix=False):
+        self.statistics.solve_count += 1
+
         if assert_prefix:
             assert self.get_shared_prefix_length(path)[0] == self._path_length
 
         self._solver.push()
+        self.statistics.push_count += 1
+
         self._add(constraints[self.constraint_count:])
         result = self._solver.check()
+
         self._solver.pop()
+        self.statistics.pop_count += 1
+
         return result
 
     def sync_with(self, subpath: List[Tuple[int, bool]], constraints):
@@ -68,6 +90,7 @@ class MySolver:
         if downgradable:
             self._path_stack.append(list())
             self._solver.push()
+            self.statistics.push_count += 1
 
         if len(self._path_stack) == 0:
             self._path_stack.append(list())
@@ -127,10 +150,14 @@ class MySolver:
 
     def _add(self, constraints: List[str]):
         logging.debug("Adding constraints: %s", str(constraints))
-        self._solver.add([z3.parse_smt2_string(c) for c in constraints])
+        self._solver.add([z3.parse_smt2_string(
+            f"(assert {c})", ctx=self._solver.ctx, decls=self._const_declarations) for c in constraints])
+        logging.debug("Solver now: %s", self._solver)
 
     def _pop(self, count):
         self._solver.pop(count)
+        self.statistics.pop_count += 1
+
         for i in range(len(self._path_stack), len(self._path_stack) - count, -1):
             self._path_length -= len(self._path_stack[i])
         del self._path_stack[len(self._path_length) - count:]
@@ -188,6 +215,7 @@ class LRUCache:
 
         self.items[id] = value
 
+
 class SolverSelectionStrategy(ABC):
     @abstractmethod
     def get_solver(self, found_solver: MySolver | None, query: Query) -> MySolver:
@@ -195,13 +223,15 @@ class SolverSelectionStrategy(ABC):
 
     def create_empty_solver() -> MySolver:
         pass
-    
+
+
 class BasicSolverSelectionStrategy(SolverSelectionStrategy):
     def get_solver(self, found_solver: MySolver | None, query: Query) -> MySolver:
         if found_solver is None:
             return self.create_empty_solver()
         else:
             return found_solver
+
 
 class SolverPool:
     def __init__(self) -> None:
@@ -210,10 +240,13 @@ class SolverPool:
         self._solver_trees: Dict[FrozenSet[int], SolverPrefixTree] = dict()
         self._next_id = 1
         self.selection_strategy = BasicSolverSelectionStrategy()
+        self._z3_ctx = z3.Context()
+        self._const_declarations: Dict[str, z3.Symbol] = dict()
 
     def solve(self, query: Query):
         key = query.dependencies
         if key not in self._solver_trees:
+            self._ensure_const_for(key)
             tree = SolverPrefixTree()
             self._solver_trees[key] = tree
 
@@ -222,17 +255,25 @@ class SolverPool:
         solver = self._get_solver(tree, query)
         return solver.solve(query.path, query.constraints)
 
+    def _ensure_const_for(self, dependencies: Iterable[int]):
+        for index in dependencies:
+            if index not in self._const_declarations:
+                self._const_declarations[f"k!{index}"] = z3.BitVec(
+                    index, 8, ctx=self._z3_ctx)
+
     def _get_solver(self, tree: SolverPrefixTree, query: Query):
         found_solver = tree.find(query.path)
-        
-        solver = self._solver_selection_strategy.get_solver(found_solver, query)
+
+        solver = self._solver_selection_strategy.get_solver(
+            found_solver, query)
         if solver is not found_solver:
             tree.insert(solver.stack_path, solver)
 
         return solver
 
     def _create_solver(self):
-        solver = MySolver(self._next_id)
+        solver = MySolver(self._next_id, self._z3_ctx,
+                          self._const_declarations)
         self._solvers.add(solver.id, solver)
         self._next_id += 1
         return solver
