@@ -66,6 +66,9 @@ class MySolver:
         if assert_prefix:
             assert self.get_shared_prefix_length(path)[0] == self._path_length
 
+        if len(path) == self._path_length:
+            return self._solver.check()
+
         self._solver.push()
         self.statistics.push_count += 1
 
