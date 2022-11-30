@@ -1,3 +1,4 @@
 [submodule "symcc"]
 	path = symcc
 	url = https://github.com/cmpt-479-982/symcc
+	branch = exporting
