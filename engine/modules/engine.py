@@ -4,7 +4,8 @@ import weakref
 import z3
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from time import perf_counter
 
 
 class ProgramPath:
@@ -25,7 +26,7 @@ class ProgramPath:
 
     def __repr__(self) -> str:
         return self.__list.__repr__()
-    
+
     def __str__(self) -> str:
         return self.__list.__str__()
 
@@ -43,21 +44,55 @@ class Query:
             "constraints": self.constraints,
         }
 
+
 @dataclass
 class SolverStatistics:
     solve_count: int = 0
     push_count: int = 0
     pop_count: int = 0
 
+    times: Dict[str, float] = field(default_factory=dict)
+
+
+class MyTimer:
+    def __init__(self, name: str = "", store_to=None):
+        self.name = name
+        self.store_to: Dict[str, float] = store_to
+
+    def __enter__(self):
+        self.start_time = perf_counter()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.elapsed_time = perf_counter() - self.start_time
+        if self.store_to is not None:
+            self.store_to[self.name] = self.store_to.get(
+                self.name, 0) + self.elapsed_time
+
+
+class NonFunctionalTimer(object):
+    def __new__(cls):
+        if not hasattr(cls, 'instance'):
+            cls.instance = super(NonFunctionalTimer, cls).__new__(cls)
+        return cls.instance
+
+    def __enter__(self):
+        pass
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        pass
+
+
 class MySolver:
     def __init__(self, id, z3_ctx, const_declarations) -> None:
         self.id = id
+        self.statistics = SolverStatistics()
+        self._timer = MyTimer(store_to=self.statistics.times)
         # Stack of subpaths expressed by site ids and whether they are taken or not.
         self._path_stack: List[List[Tuple[int, bool]]] = []
         self._path_length = 0
-        self._solver = z3.Solver(ctx=z3_ctx)
+        with self._timeit("creating"):
+            self._solver = z3.Solver(ctx=z3_ctx)
         self._const_declarations = const_declarations
-        self.statistics = SolverStatistics()
 
     def solve(self, path, constraints: List[str], assert_prefix=False):
         self.statistics.solve_count += 1
@@ -68,17 +103,18 @@ class MySolver:
 
         if assert_prefix:
             logging.debug("Solver path length: %d", self._path_length)
-            logging.debug("Shared length: %d", self.get_shared_prefix_length(path)[0])
+            logging.debug("Shared length: %d",
+                          self.get_shared_prefix_length(path)[0])
             assert self.get_shared_prefix_length(path)[0] == self._path_length
 
         if len(path) == self._path_length:
-            return self._solver.check()
+            return self._check()
 
         self._solver.push()
         self.statistics.push_count += 1
 
         self._add(constraints[self.constraint_count:])
-        result = self._solver.check()
+        result = self._check()
 
         self._solver.pop()
         self.statistics.pop_count += 1
@@ -156,67 +192,98 @@ class MySolver:
         return len(self._solver.assertions())
 
     def copy_from(self, other):
-        self._path_stack = [e.copy() for e in other._path_stack]
-        self._path_length = other._path_length
-        self._solver = other._solver.__copy__()
+        with self._timeit("copying"):
+            self._path_stack = [e.copy() for e in other._path_stack]
+            self._path_length = other._path_length
+            self._solver = other._solver.__copy__()
 
     def _add(self, constraints: List[str]):
         logging.debug("Adding constraints: %s", str(constraints))
-        self._solver.add([z3.parse_smt2_string(
-            f"(assert {c})", ctx=self._solver.ctx, decls=self._const_declarations) for c in constraints])
-        logging.debug("Solver state after adding the constraints: %s", self._solver)
+
+        with self._timeit("parsing"):
+            assertions = [z3.parse_smt2_string(
+                f"(assert {c})", ctx=self._solver.ctx, decls=self._const_declarations) for c in constraints]
+        with self._timeit("adding"):
+            self._solver.add(assertions)
+
+        logging.debug(
+            "Solver state after adding the constraints: %s", self._solver)
 
     def _pop(self, count):
-        self._solver.pop(count)
-        self.statistics.pop_count += 1
+        with self._timeit("popping"):
+            self._solver.pop(count)
+        self.statistics.pop_count += count
 
         for i in range(len(self._path_stack), len(self._path_stack) - count, -1):
             self._path_length -= len(self._path_stack[i])
         del self._path_stack[len(self._path_length) - count:]
 
+    def _check(self):
+        with self._timeit("checking"):
+            return self._solver.check()
+
     def _path_length_to(self, stack_index):
         return sum(len(e) for e in self._path_length[:stack_index])
 
+    def _timeit(self, name):
+        self._timer.name = name
+        return self._timer
+
+
+@dataclass
+class TreeStatistics:
+    times: Dict[str, float] = field(default_factory=dict)
+
 
 class SolverPrefixTree:
-    def __init__(self) -> None:
+    def __init__(self, statistics: TreeStatistics = None) -> None:
         self.solver = None
         self.children: Dict[Tuple[int, bool], SolverPrefixTree] = dict()
+        self.statistics = statistics
 
     def insert(self, path: ProgramPath, solver: MySolver):
-        if len(path) == 0:
-            self.__set_solver(solver)
-            return
+        with self._timeit("insertion"):
+            if len(path) == 0:
+                self._set_solver(solver)
+                return
 
-        if path[0] not in self.children:
-            self.children[path[0]] = SolverPrefixTree()
+            if path[0] not in self.children:
+                self.children[path[0]] = SolverPrefixTree()
 
-        self.children[path[0]].insert(path[1:], solver)
+            self.children[path[0]].insert(path[1:], solver)
 
     def find(self, path: ProgramPath) -> MySolver | None:
         """
         Returns the solver having the longest common prefix with the given path.
         """
+        with self._timeit("finding"):
+            found_solver = self.solver and self.solver()
+            if len(path) == 0:
+                return found_solver
 
-        found_solver = self.solver and self.solver()
-        if len(path) == 0:
+            if (child := self.children.get(path[0])):
+                found_solver = child.find(path[1:]) or found_solver
+
             return found_solver
 
-        if (child := self.children.get(path[0])):
-            found_solver = child.find(path[1:]) or found_solver
-
-        return found_solver
-
-    def __set_solver(self, solver: MySolver):
+    def _set_solver(self, solver: MySolver):
         if self.solver and self.solver() is not None:
             logging.warn("Replacing an existing alive solver")
         self.solver = weakref.ref(solver)
+
+    def _timeit(self, name):
+        if self.statistics:
+            return MyTimer(name, self.statistics.times)
+        else:
+            return NonFunctionalTimer()
+
 
 @dataclass
 class CacheStatistics:
     hit_count: int = 0
     add_count: int = 0
     pop_count: int = 0
+
 
 class LRUCache:
     def __init__(self, max_size) -> None:
@@ -254,6 +321,13 @@ class BasicSolverSelectionStrategy(SolverSelectionStrategy):
             return found_solver
 
 
+class PoolStatistics:
+    def __init__(self, cache: CacheStatistics):
+        self.cache = cache
+        self.solvers: Dict[int, SolverStatistics] = dict()
+        self.trees: Dict[FrozenSet[int], TreeStatistics] = dict()
+
+
 class SolverPool:
     def __init__(self, max_solvers=200) -> None:
         # This max size is random and no intuition is behind it.
@@ -264,13 +338,16 @@ class SolverPool:
         self._z3_ctx = z3.Context()
         self._const_declarations: Dict[str, z3.Symbol] = dict()
         self._should_assert_solve = False
+        self.statistics = PoolStatistics(self._solvers.statistics)
 
     def solve(self, query: Query):
         key = query.dependencies
         if key not in self._solver_trees:
             self._ensure_const_for(key)
-            tree = SolverPrefixTree()
+            stats = TreeStatistics()
+            tree = SolverPrefixTree(statistics=stats)
             self._solver_trees[key] = tree
+            self.statistics.trees[key] = stats
 
         tree = self._solver_trees[key]
 
@@ -301,6 +378,7 @@ class SolverPool:
         solver = MySolver(self._next_id, self._z3_ctx,
                           self._const_declarations)
         self._solvers.add(solver.id, solver)
+        self.statistics.solvers[solver.id] = solver.statistics
         self._next_id += 1
         return solver
 
