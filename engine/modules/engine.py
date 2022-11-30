@@ -30,6 +30,9 @@ class ProgramPath:
     def __str__(self) -> str:
         return self.__list.__str__()
 
+    def __eq__(self, __o: object) -> bool:
+        return isinstance(__o, ProgramPath) and self.__list == __o.__list
+
 
 class Query:
     def __init__(self, dependencies: Iterable[int], path, constraints) -> None:
@@ -103,6 +106,7 @@ class MySolver:
 
         if assert_prefix:
             logging.debug("Solver path length: %d", self._path_length)
+            logging.debug("Solver path: %s", self.stack_path)
             logging.debug("Shared length: %d",
                           self.get_shared_prefix_length(path)[0])
             assert self.get_shared_prefix_length(path)[0] == self._path_length
@@ -113,6 +117,7 @@ class MySolver:
         self._solver.push()
         self.statistics.push_count += 1
 
+        logging.debug("Adding the last %d constraints", len(constraints) - self.constraint_count)
         self._add(constraints[self.constraint_count:])
         result = self._check()
 
@@ -189,7 +194,8 @@ class MySolver:
     @property
     def constraint_count(self):
         # This retrieves all queries, we may use our counter to prevent the overhead.
-        return len(self._solver.assertions())
+        with self._timeit("assertion_counting"):
+            return len(self._solver.assertions())
 
     def copy_from(self, other):
         with self._timeit("copying"):
@@ -305,12 +311,18 @@ class LRUCache:
 
 
 class SolverSelectionStrategy(ABC):
+    def __init__(self, log_level=logging.DEBUG) -> None:
+        self.log_level = log_level
+
     @abstractmethod
     def get_solver(self, found_solver: MySolver | None, query: Query) -> MySolver:
         pass
 
     def create_empty_solver() -> MySolver:
         pass
+
+    def _log(self, msg, *args):
+        logging.log(self.log_level, msg, *args)
 
 
 class BasicSolverSelectionStrategy(SolverSelectionStrategy):
