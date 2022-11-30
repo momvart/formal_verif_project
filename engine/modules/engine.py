@@ -49,8 +49,11 @@ class SolverStatistics:
         self.push_count = 0
         self.pop_count = 0
 
+    def to_dict(self):
+        return {"solve_count": self.solve_count, "push_count": self.push_count, "pop_count": self.pop_count, }
+
     def __str__(self) -> str:
-        return str({"solve_count": self.solve_count, "push_count": self.push_count, "pop_count": self.pop_count, })
+        return str(self.to_dict())
 
     def __repr__(self) -> str:
         return str(self)
@@ -219,20 +222,38 @@ class SolverPrefixTree:
             logging.warn("Replacing an existing alive solver")
         self.solver = weakref.ref(solver)
 
+class CacheStatistics:
+    def __init__(self) -> None:
+        self.hit_count = 0
+        self.add_count = 0
+        self.pop_count = 0
+
+    def to_dict(self):
+        return {"hit_count": self.hit_count, "add_count": self.add_count, "pop_count": self.pop_count, }
+
+    def __str__(self) -> str:
+        return str(self.to_dict())
+
+    def __repr__(self) -> str:
+        return str(self)
 
 class LRUCache:
     def __init__(self, max_size) -> None:
         self.max_size = max_size
         self.items = OrderedDict()
+        self.statistics = CacheStatistics()
 
     def hit(self, id):
         self.items.move_to_end(id, True)
+        self.statistics.hit_count += 1
 
     def add(self, id, value):
         if len(self.items) > self.max_size:
             self.items.popitem()
+            self.statistics.pop_count += 1
 
         self.items[id] = value
+        self.statistics.add_count += 1
 
 
 class SolverSelectionStrategy(ABC):
@@ -253,9 +274,9 @@ class BasicSolverSelectionStrategy(SolverSelectionStrategy):
 
 
 class SolverPool:
-    def __init__(self) -> None:
+    def __init__(self, max_solvers=200) -> None:
         # This max size is random and no intuition is behind it.
-        self._solvers = LRUCache(200)
+        self._solvers = LRUCache(max_solvers)
         self._solver_trees: Dict[FrozenSet[int], SolverPrefixTree] = dict()
         self._next_id = 1
         self.selection_strategy = BasicSolverSelectionStrategy()
@@ -292,6 +313,7 @@ class SolverPool:
         if solver is not found_solver:
             tree.insert(solver.stack_path, solver)
 
+        self._solvers.hit(solver.id)
         return solver
 
     def _create_solver(self):
