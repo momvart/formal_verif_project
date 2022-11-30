@@ -1,16 +1,35 @@
 from collections import OrderedDict
-from typing import List, Tuple, Dict, FrozenSet, Iterable
+from typing import List, Tuple, Dict, FrozenSet, Iterable, TypeAlias
 import weakref
 import z3
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from time import perf_counter
+from enum import Enum
+
+
+class BranchAction(Enum):
+    TAKEN = 0
+    NOT_TAKEN = 1
+    OPTIMISTIC = 2
+
+    def __invert__(self):
+        if self == BranchAction.TAKEN:
+            return BranchAction.NOT_TAKEN
+        elif self == BranchAction.NOT_TAKEN:
+            return BranchAction.TAKEN
+        else:
+            raise AssertionError(
+                "Invert operator only works on taken and not taken.")
+
+
+PathStep: TypeAlias = Tuple[int, BranchAction]
 
 
 class ProgramPath:
-    def __init__(self, path: Iterable[Tuple[int, bool]] = ()) -> None:
-        self.__list: Tuple[Tuple[int, bool]] = tuple(path)
+    def __init__(self, path: Iterable[PathStep] = ()) -> None:
+        self.__list: Tuple[PathStep] = tuple(path)
 
     def __getitem__(self, index):
         if isinstance(index, slice):
@@ -34,8 +53,15 @@ class ProgramPath:
         return isinstance(__o, ProgramPath) and self.__list == __o.__list
 
 
+@dataclass
 class Query:
-    def __init__(self, dependencies: Iterable[int], path, constraints) -> None:
+    id: int
+    dependencies: FrozenSet[int]
+    path: ProgramPath
+    constraints: Tuple[str]
+
+    def __init__(self, id: int, dependencies: Iterable[int], path, constraints) -> None:
+        self.id = id
         self.dependencies: FrozenSet[int] = frozenset(dependencies)
         self.path: ProgramPath = path
         self.constraints: Tuple[str] = tuple(constraints)
@@ -91,7 +117,7 @@ class MySolver:
         self.statistics = SolverStatistics()
         self._timer = MyTimer(store_to=self.statistics.times)
         # Stack of subpaths expressed by site ids and whether they are taken or not.
-        self._path_stack: List[List[Tuple[int, bool]]] = []
+        self._path_stack: List[List[PathStep]] = []
         self._path_length = 0
         with self._timeit("creating"):
             self._solver = z3.Solver(ctx=z3_ctx)
@@ -117,7 +143,8 @@ class MySolver:
         self._solver.push()
         self.statistics.push_count += 1
 
-        logging.debug("Adding the last %d constraints", len(constraints) - self.constraint_count)
+        logging.debug("Adding the last %d constraints",
+                      len(constraints) - self.constraint_count)
         self._add(constraints[self.constraint_count:])
         result = self._check()
 
@@ -126,13 +153,13 @@ class MySolver:
 
         return result
 
-    def sync_with(self, subpath: List[Tuple[int, bool]], constraints):
+    def sync_with(self, subpath: List[PathStep], constraints):
         _, shared_stack_count = self.get_shared_prefix_length(subpath)
         self._pop(len(self._path_stack) - shared_stack_count)
         self.upgrade(subpath[self._path_length:],
                      constraints[self.constraint_count:], True)
 
-    def upgrade(self, new_subpath: List[Tuple[int, bool]], new_constraints: List[str], downgradable=False):
+    def upgrade(self, new_subpath: List[PathStep], new_constraints: List[str], downgradable=False):
         if len(new_subpath) == 0:
             return
 
@@ -152,7 +179,7 @@ class MySolver:
         self._path_length += len(new_subpath)
         self._add(new_constraints)
 
-    def downgrade(self, subpath: List[Tuple[int, bool]], constraints: List[str], force=False):
+    def downgrade(self, subpath: List[PathStep], constraints: List[str], force=False):
         shared_subpath_length, shared_stack_count = self.get_shared_prefix_length(
             subpath)
         completely_shared_length = self._path_length_to(shared_stack_count)
@@ -168,7 +195,7 @@ class MySolver:
         self._pop(len(self._path_length) - shared_stack_count)
         return True
 
-    def get_shared_prefix_length(self, path: List[Tuple[int, bool]]) -> Tuple[int, int]:
+    def get_shared_prefix_length(self, path: List[PathStep]) -> Tuple[int, int]:
         subpath_index = 0
         stack_index = 0
         while subpath_index < len(path) and stack_index < len(self._path_stack):
@@ -244,7 +271,7 @@ class TreeStatistics:
 class SolverPrefixTree:
     def __init__(self, statistics: TreeStatistics = None) -> None:
         self.solver = None
-        self.children: Dict[Tuple[int, bool], SolverPrefixTree] = dict()
+        self.children: Dict[PathStep, SolverPrefixTree] = dict()
         self.statistics = statistics
 
     def insert(self, path: ProgramPath, solver: MySolver):

@@ -1,7 +1,8 @@
 import json
-from typing import FrozenSet, List, Tuple, Iterable, MutableSet, Any
+from typing import List
 import logging
-from .engine import Query, ProgramPath
+from .engine import Query, ProgramPath, BranchAction
+
 
 def _get_content(line):
     assert line.startswith("[EXPORT] ")
@@ -12,7 +13,7 @@ def read_qsym_log(path) -> List[Query]:
     queries = list()
     with open(path, "r") as f:
         path = list()
-        
+
         dependencies = None
         current_path = None
         constraints = None
@@ -59,18 +60,22 @@ def read_qsym_log(path) -> List[Query]:
 
             elif command == "BRNEG":
                 current_path = ProgramPath(
-                    path[:-1] + [(path[-1][0], not path[-1][1])])
-
+                    path[:-1] + [(path[-1][0], ~path[-1][1])])
+            elif command == "OPTIMISTIC":
+                current_path = ProgramPath(
+                    path[:-1] + [(path[-1][0], BranchAction.OPTIMISTIC)])
             elif command == "SMT":
                 pass
             elif command == "BRANCH":
                 branch = _get_content(f.readline()).split()
-                path.append((int(branch[0]), branch[1] == 'T'))
+                path.append(
+                    (int(branch[0]), BranchAction.TAKEN if branch[1] == 'T' else BranchAction.NOT_TAKEN))
 
             elif command == "CHECK":
                 if not current_path:
                     current_path = ProgramPath(path)
-                queries.append(Query(dependencies, current_path, constraints))
+                queries.append(Query(len(queries), dependencies,
+                               current_path, constraints))
 
             elif len(state) > 0:
                 if False:
