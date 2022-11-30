@@ -4,6 +4,7 @@ import weakref
 import z3
 import logging
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 
 class ProgramPath:
@@ -42,22 +43,11 @@ class Query:
             "constraints": self.constraints,
         }
 
-
+@dataclass
 class SolverStatistics:
-    def __init__(self) -> None:
-        self.solve_count = 0
-        self.push_count = 0
-        self.pop_count = 0
-
-    def to_dict(self):
-        return {"solve_count": self.solve_count, "push_count": self.push_count, "pop_count": self.pop_count, }
-
-    def __str__(self) -> str:
-        return str(self.to_dict())
-
-    def __repr__(self) -> str:
-        return str(self)
-
+    solve_count: int = 0
+    push_count: int = 0
+    pop_count: int = 0
 
 class MySolver:
     def __init__(self, id, z3_ctx, const_declarations) -> None:
@@ -222,20 +212,11 @@ class SolverPrefixTree:
             logging.warn("Replacing an existing alive solver")
         self.solver = weakref.ref(solver)
 
+@dataclass
 class CacheStatistics:
-    def __init__(self) -> None:
-        self.hit_count = 0
-        self.add_count = 0
-        self.pop_count = 0
-
-    def to_dict(self):
-        return {"hit_count": self.hit_count, "add_count": self.add_count, "pop_count": self.pop_count, }
-
-    def __str__(self) -> str:
-        return str(self.to_dict())
-
-    def __repr__(self) -> str:
-        return str(self)
+    hit_count: int = 0
+    add_count: int = 0
+    pop_count: int = 0
 
 class LRUCache:
     def __init__(self, max_size) -> None:
