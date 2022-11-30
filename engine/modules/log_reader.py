@@ -11,7 +11,7 @@ def _get_content(line):
 def read_qsym_log(path) -> List[Query]:
     queries = list()
     with open(path, "r") as f:
-        path = None
+        path = list()
         
         dependencies = None
         current_path = None
@@ -68,6 +68,8 @@ def read_qsym_log(path) -> List[Query]:
                 path.append((int(branch[0]), branch[1] == 'T'))
 
             elif command == "CHECK":
+                if not current_path:
+                    current_path = ProgramPath(path)
                 queries.append(Query(dependencies, current_path, constraints))
 
             elif len(state) > 0:
