@@ -301,7 +301,7 @@ class SolverPrefixTree:
 
     def _set_solver(self, solver: MySolver):
         if self.solver and self.solver() is not None:
-            logging.warn("Replacing an existing alive solver")
+            logging.warn("Replacing an existing alive solver %s with %s", self.solver(), solver)
         self.solver = weakref.ref(solver)
 
     def _timeit(self, name):
@@ -350,6 +350,17 @@ class SolverSelectionStrategy(ABC):
 
     def _log(self, msg, *args):
         logging.log(self.log_level, msg, *args)
+
+    def _create_solver(self, path, constraints, existing_solver: MySolver = None, use_copy=False):
+        solver = self.create_empty_solver()
+        if use_copy and existing_solver:
+            solver.copy_from(existing_solver)
+            solver.upgrade(path[solver.stack_path_len:],
+                           constraints[solver.constraint_count:])
+        else:
+            solver.upgrade(path, constraints)
+        
+        return solver
 
 
 class BasicSolverSelectionStrategy(SolverSelectionStrategy):
