@@ -9,7 +9,7 @@ def _get_content(line):
     return line[len("[EXPORT] "):]
 
 
-def read_qsym_log(path) -> List[Query]:
+def read_qsym_log(path, separate_programs=False) -> List[Query]:
     queries = list()
     with open(path, "r") as f:
         path = list()
@@ -40,6 +40,8 @@ def read_qsym_log(path) -> List[Query]:
                 path = list()
             elif command == "END_PROG":
                 path = None
+                if separate_programs:
+                    queries.append(None)
 
             elif command == "RESET":
                 dependencies = set()

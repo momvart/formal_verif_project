@@ -380,6 +380,8 @@ class SolverPool:
         self.statistics = PoolStatistics(self._solvers.statistics)
 
     def solve(self, query: Query):
+        if query is None:
+            return z3.unknown
         key = query.dependencies
         if key not in self._solver_trees:
             self._ensure_const_for(key)
