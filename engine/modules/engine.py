@@ -416,7 +416,11 @@ class SolverPool:
                     index, 8, ctx=self._z3_ctx)
 
     def _get_solver(self, tree: SolverPrefixTree, query: Query):
-        found_solver = tree.find(query.path)
+        # For optimistic ones use an empty solver
+        if query.path[-1][1] == BranchAction.OPTIMISTIC:
+            found_solver = tree.find(ProgramPath([]))
+        else:
+            found_solver = tree.find(query.path)
 
         solver = self._solver_selection_strategy.get_solver(
             found_solver, query)
